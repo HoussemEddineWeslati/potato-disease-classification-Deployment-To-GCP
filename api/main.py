@@ -1,86 +1,45 @@
-<<<<<<< HEAD
-import numpy as np
-from fastapi import FastAPI
-from fastapi import File, UploadFile
-import uvicorn
-import numpy as np
-from io import BytesIO
-from PIL import Image
-import tensorflow as tf
+"""FastAPI service that classifies potato leaf images.
+
+Run with the local model:          uvicorn api.main:app
+Run against TensorFlow Serving:    PREDICTOR=tf-serving uvicorn api.main:app
+"""
+
+from __future__ import annotations
+
+import os
+
+from fastapi import FastAPI, File, HTTPException, UploadFile
+
+from .inference import InvalidImageError, KerasPredictor, Predictor, TFServingPredictor, preprocess, to_result
+
+MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 
 
+def create_app(predictor: Predictor) -> FastAPI:
+    app = FastAPI(title="Potato disease classifier", version="2.0.0")
+
+    @app.get("/health")
+    def health() -> dict:
+        return {"status": "ok"}
+
+    @app.post("/predict")
+    async def predict(file: UploadFile = File(...)) -> dict:
+        if file.content_type and not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=415, detail="upload an image file")
+        data = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(data) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="image larger than 5 MB")
+        try:
+            batch = preprocess(data)
+        except InvalidImageError as error:
+            raise HTTPException(status_code=400, detail=str(error)) from error
+        return to_result(predictor.predict(batch)[0])
+
+    return app
 
 
-app = FastAPI()
-
-MODEL = tf.keras.models.load_model("../models/1")
-CLASS_NAMES = ["Early Blight","Late Blight","Healthy"]
-@app.get("/ping")
-async def ping():
-    return "Hello"
-def read_file_as_image(data) -> np.ndarray:
-    image= np.array(Image.open(BytesIO(data)))
-    return image
-@app.post("/predict")
-async def predict(
-    file: UploadFile = File(...)
-):
-    image = read_file_as_image(await file.read())
-    img_batch = np.expand_dims(image, 0)
-    predictions = MODEL.predict(img_batch)
-    predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
-    confidence = np.max(predictions[0])
-    return {
-        'class': predicted_class,
-        'confidence':float(confidence)
-    }
+def _default_predictor() -> Predictor:
+    return TFServingPredictor() if os.environ.get("PREDICTOR") == "tf-serving" else KerasPredictor()
 
 
-
-
-
-if __name__ =="__main__" :
-=======
-import numpy as np
-from fastapi import FastAPI
-from fastapi import File, UploadFile
-import uvicorn
-import numpy as np
-from io import BytesIO
-from PIL import Image
-import tensorflow as tf
-
-
-
-
-app = FastAPI()
-
-MODEL = tf.keras.models.load_model("../models/1")
-CLASS_NAMES = ["Early Blight","Late Blight","Healthy"]
-@app.get("/ping")
-async def ping():
-    return "Hello"
-def read_file_as_image(data) -> np.ndarray:
-    image= np.array(Image.open(BytesIO(data)))
-    return image
-@app.post("/predict")
-async def predict(
-    file: UploadFile = File(...)
-):
-    image = read_file_as_image(await file.read())
-    img_batch = np.expand_dims(image, 0)
-    predictions = MODEL.predict(img_batch)
-    predicted_class = CLASS_NAMES[np.argmax(predictions[0])]
-    confidence = np.max(predictions[0])
-    return {
-        'class': predicted_class,
-        'confidence':float(confidence)
-    }
-
-
-
-
-
-if __name__ =="__main__" :
->>>>>>> 2bbe67a (commit2)
-    uvicorn.run(app, host='localhost', port=8000)
+app = create_app(_default_predictor())

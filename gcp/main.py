@@ -1,54 +1,44 @@
-from google.cloud import storage
-import tensorflow as tf
-from PIL import Image
+"""Google Cloud Function serving the Keras model stored in a Cloud Storage bucket.
+
+Deploy:  gcloud functions deploy predict --runtime python312 --trigger-http --memory 1024MB \
+           --set-env-vars BUCKET_NAME=<your-bucket>,MODEL_BLOB=models/potatoes.h5
+"""
+
+import io
+import os
+
 import numpy as np
+from PIL import Image
 
-model = None
-interpreter = None
-input_index = None
-output_index = None
-
-class_names = ["Early Blight", "Late Blight", "Healthy"]
-
-BUCKET_NAME = "your bucket name" # Here you need to put the name of your GCP bucket
+CLASS_NAMES = ["Early Blight", "Late Blight", "Healthy"]
+IMAGE_SIZE = 256
+_model = None
 
 
-def download_blob(bucket_name, source_blob_name, destination_file_name):
-    """Downloads a blob from the bucket."""
-    storage_client = storage.Client()
-    bucket = storage_client.get_bucket(bucket_name)
-    blob = bucket.blob(source_blob_name)
+def _load_model():
+    global _model
+    if _model is None:
+        import tensorflow as tf
+        from google.cloud import storage
 
-    blob.download_to_filename(destination_file_name)
-
-    print(f"Blob {source_blob_name} downloaded to {destination_file_name}.")
+        local_path = "/tmp/model.h5"
+        bucket = storage.Client().bucket(os.environ["BUCKET_NAME"])
+        bucket.blob(os.environ.get("MODEL_BLOB", "models/potatoes.h5")).download_to_filename(local_path)
+        _model = tf.keras.models.load_model(local_path)
+    return _model
 
 
 def predict(request):
-    global model
-    if model is None:
-        download_blob(
-            BUCKET_NAME,
-            "models/potatoes.h5",
-            "/tmp/potatoes.h5",
-        )
-        model = tf.keras.models.load_model("/tmp/potatoes.h5")
+    upload = request.files.get("file")
+    if upload is None:
+        return {"error": "send the image in a 'file' form field"}, 400
+    try:
+        image = Image.open(io.BytesIO(upload.read())).convert("RGB").resize((IMAGE_SIZE, IMAGE_SIZE))
+    except OSError:
+        return {"error": "the file is not a readable image"}, 400
 
-    image = request.files["file"]
-
-    image = np.array(
-        Image.open(image).convert("RGB").resize((256, 256)) # image resizing
-    )
-
-    image = image/255 # normalize the image in 0 to 1 range
-
-    img_array = tf.expand_dims(img, 0)
-    predictions = model.predict(img_array)
-
-    print("Predictions:",predictions)
-
-    predicted_class = class_names[np.argmax(predictions[0])]
-    confidence = round(100 * (np.max(predictions[0])), 2)
-
-    return {"class": predicted_class, "confidence": confidence}
-
+    # The model rescales pixels itself, so raw 0-255 values are passed in.
+    batch = np.asarray(image, dtype=np.float32)[np.newaxis, ...]
+    probabilities = _load_model().predict(batch, verbose=0)[0]
+    best = int(np.argmax(probabilities))
+    return {"class": CLASS_NAMES[best], "confidence": round(float(probabilities[best]), 4)}

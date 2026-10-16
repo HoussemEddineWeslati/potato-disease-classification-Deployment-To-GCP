@@ -1,15 +1,7 @@
-<<<<<<< HEAD
-tensorflow==2.5
-google-cloud-storage==1.16.1
-Pillow==6.0.0
-
-=======
-tensorflow==2.5.0
-fastapi
-uvicorn
-python-multipart
-pillow
-tensorflow-serving-api==2.5.0
-matplotlib
-numpy
->>>>>>> 2bbe67a (commit2)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+python-multipart>=0.0.9
+pillow>=10.0
+numpy>=1.26
+requests>=2.31
+tensorflow>=2.15
